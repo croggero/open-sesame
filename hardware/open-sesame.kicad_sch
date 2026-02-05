@@ -3551,7 +3551,7 @@
 	)
 	(symbol
 		(lib_id "power:+24V")
-		(at 30.48 31.75 90)
+		(at 53.34 31.75 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -3560,7 +3560,7 @@
 		(fields_autoplaced yes)
 		(uuid "10a8ea21-402f-4874-9d3c-a2f629e2aba7")
 		(property "Reference" "#PWR01"
-			(at 34.29 31.75 0)
+			(at 49.53 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3569,7 +3569,7 @@
 			)
 		)
 		(property "Value" "+24V"
-			(at 26.67 31.7499 90)
+			(at 57.15 31.7499 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3578,7 +3578,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 30.48 31.75 0)
+			(at 53.34 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3587,7 +3587,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 30.48 31.75 0)
+			(at 53.34 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3596,7 +3596,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+24V\""
-			(at 30.48 31.75 0)
+			(at 53.34 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3608,7 +3608,7 @@
 			(uuid "d1497893-bfee-45dc-bb4d-e6fec819793e")
 		)
 		(instances
-			(project "ferrous-oxslide2"
+			(project "open-sesame"
 				(path "/0083c209-1745-4c16-a7cf-90b66eccdd04"
 					(reference "#PWR01")
 					(unit 1)
@@ -5232,7 +5232,7 @@
 	)
 	(symbol
 		(lib_id "power:+3V3")
-		(at 53.34 31.75 270)
+		(at 30.48 31.75 90)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -5241,7 +5241,7 @@
 		(fields_autoplaced yes)
 		(uuid "d74612db-311e-49a9-9452-dfcc79f9ae9a")
 		(property "Reference" "#PWR04"
-			(at 49.53 31.75 0)
+			(at 34.29 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5250,16 +5250,15 @@
 			)
 		)
 		(property "Value" "+3V3"
-			(at 57.15 31.7499 90)
+			(at 29.21 29.21 90)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
 			)
 		)
 		(property "Footprint" ""
-			(at 53.34 31.75 0)
+			(at 30.48 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5268,7 +5267,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 53.34 31.75 0)
+			(at 30.48 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5277,7 +5276,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 53.34 31.75 0)
+			(at 30.48 31.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5289,7 +5288,7 @@
 			(uuid "d09b743b-24ad-4d96-bcc1-348e05c47ae1")
 		)
 		(instances
-			(project ""
+			(project "open-sesame"
 				(path "/0083c209-1745-4c16-a7cf-90b66eccdd04"
 					(reference "#PWR04")
 					(unit 1)
