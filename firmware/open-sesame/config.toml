@@ -1,0 +1,31 @@
+# Open Sesame — hardware & tuning configuration
+#
+# Parsed at build time by build.rs → compiled as constants (zero runtime cost).
+# After editing, `cargo build` will pick up changes automatically.
+
+[pins]
+factory_reset = 0
+motor_in1     = 7      # DRV8874 IN1/EN — LEDC PWM channel 0
+motor_in2     = 44     # DRV8874 IN2/PH — digital direction
+motor_nslp    = 43     # DRV8874 nSLP   — active-high enable
+enc_a         = 8      # Quadrature encoder channel A
+enc_b         = 9      # Quadrature encoder channel B
+led           = 21     # On-board status LED (active-high)
+
+[motor]
+pwm_freq_hz = 20_000   # Above audible range
+mode        = "PhEn"   # "PhEn" or "InIn" — must match hardware MODE pin
+min_duty    = 30       # Minimum PWM to overcome motor stiction (0–255)
+max_duty    = 200      # Maximum PWM to control speed
+
+[door]
+dead_zone         = 4       # Encoder counts/cycle below which door is "stationary"
+assist_gain       = 1.5     # Velocity → PWM scaling for assist mode
+lpf_alpha         = 0.65    # Low-pass filter weight for velocity (0.0–1.0)
+idle_timeout_ms   = 800     # No-motion duration before sleeping motor
+endstop_closed    = 0       # Encoder count at fully-closed position
+endstop_open      = 12_000  # Encoder count at fully-open position
+endstop_ramp_counts = 500   # Counts before endstop where power ramps down
+remote_power      = 180     # PWM duty for remote open/close commands (0–max_duty)
+invert_direction  = false   # Flip encoder↔open/close mapping
+loop_period_ms    = 10      # Control loop tick interval
