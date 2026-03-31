@@ -35,9 +35,6 @@ use esp_idf_hal::{
 
 use crate::config;
 
-/// Maximum duty cycle for 8-bit resolution (2^8 - 1).
-const MAX_DUTY: u32 = 255;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // MotorMode
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,15 +115,18 @@ impl<'d> MotorDriver<'d> {
 
     // ── Motion ────────────────────────────────────────────────────────────────
 
-    /// Set motor output. `power` in [-255, 255].
+    /// Set motor output. `power` in [-config::MAX_DUTY, config::MAX_DUTY].
     /// Positive = forward, negative = reverse, 0 = active brake.
     /// Non-zero values below MIN_POWER are clamped up to MIN_POWER.
     pub fn set_power(&mut self, power: i32) -> Result<()> {
-        let power = match power.clamp(-255, 255) {
+        let max = config::MAX_DUTY as i32;
+
+        let power = match power.clamp(-max, max) {
             p if p > 0 => p.max(config::MIN_DUTY),
             p if p < 0 => p.min(-config::MIN_DUTY),
             p => p,
         };
+
         match self.mode {
             MotorMode::InIn => self.set_power_inin(power),
             MotorMode::PhEn => self.set_power_phen(power),
@@ -154,7 +154,7 @@ impl<'d> MotorDriver<'d> {
     fn set_power_inin(&mut self, power: i32) -> Result<()> {
         if power == 0 {
             // Brake: IN1 = HIGH, IN2 = HIGH
-            self.pwm.set_duty(MAX_DUTY)?;
+            self.pwm.set_duty(config::MAX_DUTY)?;
             self.in2.set_high()?;
         } else if power > 0 {
             // Forward: IN1 = PWM, IN2 = LOW

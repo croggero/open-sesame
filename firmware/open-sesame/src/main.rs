@@ -22,7 +22,7 @@ use esp_idf_svc::{
     nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault},
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
-use log::info;
+use log::{info, warn};
 use std::time::Duration;
 
 mod captive_portal;
@@ -34,7 +34,7 @@ mod mqtt_client;
 
 use captive_portal::{needs_provisioning, run_captive_portal};
 use config::Config;
-use door_controller::DoorController;
+use door_controller::{DoorController, DoorState};
 use encoder::Encoder;
 use motor::MotorDriver;
 use mqtt_client::{json_str_field, MqttCommand, MqttHandle, TELEMETRY_EVERY_N_TICKS};
@@ -116,6 +116,13 @@ fn main() -> Result<()> {
     let wifi = connect_wifi(peripherals.modem, sysloop.clone(), &config)?;
     info!("WiFi connected");
 
+    // ── Toggle button ─────────────────────────────────────────────────────────
+    let mut toggle_btn = PinDriver::input(unsafe { AnyIOPin::new(config::PIN_TOGGLE) })?;
+    toggle_btn.set_pull(Pull::Up)?;
+    let mut toggle_last_raw = toggle_btn.is_high(); // high = released (active-low)
+    let mut toggle_debounce: u32 = 0;
+    let mut toggle_pressed_prev = false;
+
     // ── Encoder (hardware PCNT) ─────────────────────────────────────────────
     info!("Initializing Encoder");
     let encoder = Encoder::new(
@@ -155,7 +162,30 @@ fn main() -> Result<()> {
         // ── Periodic state publish (state + position + velocity) ──────────────
         tick_count = tick_count.wrapping_add(1);
         if tick_count % TELEMETRY_EVERY_N_TICKS == 0 {
-            mqtt.publish_state(door.state(), door.position(), door.velocity(), door.power());
+            mqtt.publish_state(&door);
+        }
+
+        // ── Toggle button ─────────────────────────────────────────────────────
+        {
+            let raw = toggle_btn.is_high();
+            if raw == toggle_last_raw {
+                if toggle_debounce < config::BUTTON_DEBOUNCE_TICKS {
+                    toggle_debounce += 1;
+                }
+            } else {
+                toggle_last_raw = raw;
+                toggle_debounce = 0;
+            }
+
+            // Stable low = button pressed; detect the falling edge
+            let pressed = toggle_debounce >= config::BUTTON_DEBOUNCE_TICKS && !raw;
+            if pressed && !toggle_pressed_prev {
+                match door.state() {
+                    DoorState::Open | DoorState::Opening => door.drive_close()?,
+                    _ => door.drive_open()?,
+                }
+            }
+            toggle_pressed_prev = pressed;
         }
 
         // ── MQTT commands ─────────────────────────────────────────────────────
@@ -178,13 +208,13 @@ fn main() -> Result<()> {
                     info!("Encoder reset requested via MQTT");
                     door.reset_position();
                 }
-                MqttCommand::SetPower { power } => {
-                    info!("MQTT set power: {}", power);
-                    door.set_power(power)?;
-                }
-                MqttCommand::Open => door.drive_open(),
-                MqttCommand::Close => door.drive_close(),
+                MqttCommand::Open => door.drive_open()?,
+                MqttCommand::Close => door.drive_close()?,
                 MqttCommand::Stop => door.stop()?,
+                MqttCommand::Calibrate => {
+                    info!("Calibration requested via MQTT");
+                    door.start_calibrate()?;
+                }
             }
         }
 
@@ -239,7 +269,7 @@ fn connect_wifi(
 }
 
 fn warn_wifi(e: impl std::fmt::Debug) {
-    log::warn!("WiFi connect error: {:?}", e);
+    warn!("WiFi connect error: {:?}", e);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
