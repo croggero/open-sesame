@@ -204,10 +204,7 @@ fn main() -> Result<()> {
                     drop(wifi); // graceful disconnect
                     esp_idf_hal::reset::restart();
                 }
-                MqttCommand::ResetEncoder => {
-                    info!("Encoder reset requested via MQTT");
-                    door.reset_position();
-                }
+                MqttCommand::Position(pos) => door.set_position(pos)?,
                 MqttCommand::Open => door.drive_open()?,
                 MqttCommand::Close => door.drive_close()?,
                 MqttCommand::Stop => door.stop()?,

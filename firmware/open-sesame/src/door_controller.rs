@@ -81,16 +81,6 @@ impl DoorState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DoorTarget
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq)]
-enum DoorTarget {
-    Open,
-    Close,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // CalibrationStep
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -121,7 +111,7 @@ pub struct DoorController<'d, 'e> {
     last_pos: i32,
     velocity: f32,
     last_move_time: Instant,
-    target: Option<DoorTarget>,
+    target: Option<i32>,
     endstop_open: i32,
     endstop_closed: i32,
     /// Active calibration step, or None when not calibrating.
@@ -184,6 +174,16 @@ impl<'d, 'e> DoorController<'d, 'e> {
         self.endstop_open != self.endstop_closed
     }
 
+    fn pct_to_counts(&self, target: i32) -> i32 {
+        let range = (self.endstop_open - self.endstop_closed).abs();
+        if range > 0 {
+            let target = target.clamp(0, 100);
+            (target * range) / 100 + self.endstop_closed
+        } else {
+            0
+        }
+    }
+
     fn next_state(&mut self, pos: i32) -> Result<DoorState> {
         // Check if door is stopping
         if self.state == DoorState::Stopping {
@@ -216,7 +216,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
             pos >= self.endstop_open
         };
 
-        if at_open && self.target != Some(DoorTarget::Close) {
+        if at_open && self.target != Some(0) {
             self.target = None;
             self.motor.brake()?;
             self.motor.sleep()?;
@@ -229,14 +229,14 @@ impl<'d, 'e> DoorController<'d, 'e> {
             pos <= self.endstop_closed
         };
 
-        if at_closed && self.target != Some(DoorTarget::Open) {
+        if at_closed && self.target != Some(100) {
             self.target = None;
             self.motor.brake()?;
             self.motor.sleep()?;
             return Ok(DoorState::Closed);
         }
 
-        if let Some(target) = self.target {
+        if let Some(target_pct) = self.target {
             // ── Obstacle detection ────────────────────────────────────────────
             // Wait for first movement after motor starts, then watch for stall.
             if self.velocity.abs() as i32 > DEAD_ZONE {
@@ -255,20 +255,18 @@ impl<'d, 'e> DoorController<'d, 'e> {
                 }
             }
 
-            let ramp = self.endstop_ramp_factor(pos);
+            let target_counts = self.pct_to_counts(target_pct);
+            let ramp = self.ramp_factor(pos, target_counts);
             let power = ((OPERATING_POWER as f32 * ramp) as i32).max(1);
 
             // ── Handle Target ────────────────────────────────
             self.motor.wake()?;
-            return match target {
-                DoorTarget::Open => {
-                    self.motor.set_power(power * dir())?;
-                    Ok(DoorState::Opening)
-                }
-                DoorTarget::Close => {
-                    self.motor.set_power(-power * dir())?;
-                    Ok(DoorState::Closing)
-                }
+            if pos - target_counts < 0 {
+                self.motor.set_power(power * dir())?;
+                return Ok(DoorState::Opening);
+            } else {
+                self.motor.set_power(-power * dir())?;
+                return Ok(DoorState::Closing);
             };
         }
 
@@ -279,10 +277,10 @@ impl<'d, 'e> DoorController<'d, 'e> {
             self.last_move_time = Instant::now();
 
             Ok(if self.velocity > ASSIST_VELOCITY_THRESHOLD {
-                self.target = Some(DoorTarget::Open);
+                self.target = Some(100); // Open
                 DoorState::Opening
             } else if self.velocity < -ASSIST_VELOCITY_THRESHOLD {
-                self.target = Some(DoorTarget::Close);
+                self.target = Some(0); // Close
                 DoorState::Closing
             } else {
                 self.target = None;
@@ -298,36 +296,37 @@ impl<'d, 'e> DoorController<'d, 'e> {
         }
     }
 
-    fn endstop_ramp_factor(&self, pos: i32) -> f32 {
-        let dist_open = (pos - self.endstop_open).abs();
-        let dist_closed = (pos - self.endstop_closed).abs();
-        let min_dist = dist_open.min(dist_closed);
-
-        if min_dist < ENDSTOP_RAMP_COUNTS {
-            min_dist as f32 / ENDSTOP_RAMP_COUNTS as f32
+    fn ramp_factor(&self, pos: i32, target: i32) -> f32 {
+        let dist = (pos - target).abs();
+        if dist < ENDSTOP_RAMP_COUNTS {
+            dist as f32 / ENDSTOP_RAMP_COUNTS as f32
         } else {
             1.0
         }
     }
 
     // ── Commands ───────────────────────────────────────────────────────
-    
-    /// Start driving the door toward the open endstop.
-    pub fn drive_open(&mut self) -> Result<()> {
-        info!("Setting target to: Open");
-        self.target = Some(DoorTarget::Open);
+
+    /// Set the door to a certain postion between its endstops (0 = closed, 100 = open)
+    pub fn set_position(&mut self, pos: i32) -> Result<()> {
+        let pos = pos.clamp(0, 100);
+        info!("Setting target position to: {}", pos);
+        self.target = Some(pos);
         self.obstacle_stall_count = 0;
         self.obstacle_moving_seen = false;
         Ok(())
     }
 
+    /// Start driving the door toward the open endstop.
+    pub fn drive_open(&mut self) -> Result<()> {
+        info!("Setting target to: Open");
+        self.set_position(100)
+    }
+
     /// Start driving the door toward the closed endstop.
     pub fn drive_close(&mut self) -> Result<()> {
         info!("Setting Target to: Close");
-        self.target = Some(DoorTarget::Close);
-        self.obstacle_stall_count = 0;
-        self.obstacle_moving_seen = false;
-        Ok(())
+        self.set_position(0)
     }
 
     /// Stop and clear any door target. Motor sleeps.
@@ -477,20 +476,23 @@ impl<'d, 'e> DoorController<'d, 'e> {
         self.encoder.read()
     }
 
+    pub fn position_pct(&self) -> i32 {
+        let range = (self.endstop_open - self.endstop_closed).abs();
+        if range > 0 {
+            let position = self.position();
+            let pct = (position - self.endstop_closed) * 100 / range;
+            pct.clamp(0, 100)
+        } else {
+            0
+        }
+    }
+
     pub fn state(&self) -> &DoorState {
         &self.state
     }
 
-    pub fn reset_position(&self) {
-        self.encoder.reset();
-    }
-
     pub fn power(&self) -> i32 {
         self.motor.get_power()
-    }
-
-    pub fn endstops(&self) -> (i32, i32) {
-        (self.endstop_open, self.endstop_closed)
     }
 
     pub fn loop_period() -> Duration {

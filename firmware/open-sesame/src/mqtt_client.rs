@@ -10,9 +10,9 @@ use esp_idf_svc::mqtt::client::{
 use log::{info, warn};
 
 // Subscribed Topics
-pub const TOPIC_CONFIG: &str = "set_config";
-pub const TOPIC_ENCODER_RESET: &str = "reset_encoder";
+pub const TOPIC_CONFIG: &str = "config/set";
 pub const TOPIC_COMMAND: &str = "command"; // payload: "open" | "close" | "stop" | "calibrate"
+pub const TOPIC_SET_POSITION: &str = "position/set";
 
 // Published Topics
 pub const TOPIC_STATE: &str = "state";
@@ -26,12 +26,12 @@ pub enum MqttCommand {
     Connected,
     /// JSON payload with partial device config — apply and reboot.
     ConfigUpdate(String),
-    /// Zero the encoder position counter.
-    ResetEncoder,
     /// Drive door to the open endstop.
     Open,
     /// Drive door to the closed endstop.
     Close,
+    /// Set door to position from 0-100
+    Position(i32),
     /// Stop motor and clear any remote target.
     Stop,
     /// Auto-detect endstops by driving to each end and watching for stall.
@@ -108,11 +108,18 @@ impl MqttHandle {
                                 None => None,
                             };
 
+                            if let Ok(d) = std::str::from_utf8(data) {
+                                info!("MQTT Rx: {}", d);
+                            }
+
                             let cmd = match suffix {
                                 Some(TOPIC_CONFIG) => std::str::from_utf8(data)
                                     .ok()
                                     .map(|s| MqttCommand::ConfigUpdate(s.to_string())),
-                                Some(TOPIC_ENCODER_RESET) => Some(MqttCommand::ResetEncoder),
+                                Some(TOPIC_SET_POSITION) => std::str::from_utf8(data)
+                                    .ok()
+                                    .and_then(|s| s.parse::<i32>().ok())
+                                    .map(|p| MqttCommand::Position(p)),
                                 Some(TOPIC_COMMAND) => {
                                     std::str::from_utf8(data).ok().and_then(|s| match s {
                                         "open" => Some(MqttCommand::Open),
@@ -159,16 +166,7 @@ impl MqttHandle {
         let state = door.state();
         let velocity = door.velocity();
         let power = door.power();
-
-        let (endstop_open, endstop_closed) = door.endstops();
-
-        let range = (endstop_open - endstop_closed).abs();
-        let pos_pct = if range > 0 {
-            let pct = (position - endstop_closed) * 100 / range;
-            pct.clamp(0, 100)
-        } else {
-            0
-        };
+        let pos_pct = door.position_pct();
 
         let full_topic = format!("{}/{}", self.topic_prefix, TOPIC_STATE);
         let payload = format!(
@@ -194,6 +192,7 @@ impl MqttHandle {
     pub fn publish_ha_discovery(&mut self, client_id: &str) {
         let state_topic = format!("{}/{}", self.topic_prefix, TOPIC_STATE);
         let command_topic = format!("{}/{}", self.topic_prefix, TOPIC_COMMAND);
+        let set_position_topic = format!("{}/{}", self.topic_prefix, TOPIC_SET_POSITION);
 
         let device = format!(
             r#"{{
@@ -216,6 +215,7 @@ impl MqttHandle {
                 "value_template":"{{{{value_json.state}}}}",
                 "position_topic":"{state}",
                 "position_template":"{{{{value_json.pos_pct}}}}",
+                "set_position_topic":"{set_pos}",
                 "command_topic":"{cmd}",
                 "payload_open":"open",
                 "payload_close":"close",
@@ -229,6 +229,7 @@ impl MqttHandle {
             id = client_id,
             state = state_topic,
             cmd = command_topic,
+            set_pos = set_position_topic,
             device = device,
         );
 
@@ -265,7 +266,7 @@ impl MqttHandle {
 
     /// Subscribe to all command topics (config updates, encoder reset, etc.).
     pub fn subscribe_commands(&mut self) -> Result<()> {
-        for topic in [TOPIC_CONFIG, TOPIC_ENCODER_RESET, TOPIC_COMMAND] {
+        for topic in [TOPIC_CONFIG, TOPIC_COMMAND, TOPIC_SET_POSITION] {
             let full_topic = format!("{}/{}", self.topic_prefix, topic);
             self.client.subscribe(&full_topic, QoS::AtLeastOnce)?;
             info!("Subscribed to {}", topic);
@@ -278,18 +279,18 @@ impl MqttHandle {
 // Simple JSON field extractor (no external crate needed for our tiny payloads)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// /// Extract an unquoted numeric value of `key` from a flat JSON object.
-// /// e.g. `json_num_field(r#"{"power":100}"#, "power")` → Some(100)
-// pub fn json_num_field(json: &str, key: &str) -> Option<i32> {
-//     let needle = format!("\"{}\"", key);
-//     let start = json.find(&needle)? + needle.len();
-//     let after_colon = json[start..].find(':')? + start + 1;
-//     let trimmed = json[after_colon..].trim_start();
-//     let end = trimmed
-//         .find(|c: char| !c.is_ascii_digit() && c != '-')
-//         .unwrap_or(trimmed.len());
-//     trimmed[..end].parse::<i32>().ok()
-// }
+/// Extract an unquoted numeric value of `key` from a flat JSON object.
+/// e.g. `json_num_field(r#"{"power":100}"#, "power")` → Some(100)
+pub fn json_num_field(json: &str, key: &str) -> Option<i32> {
+    let needle = format!("\"{}\"", key);
+    let start = json.find(&needle)? + needle.len();
+    let after_colon = json[start..].find(':')? + start + 1;
+    let trimmed = json[after_colon..].trim_start();
+    let end = trimmed
+        .find(|c: char| !c.is_ascii_digit() && c != '-')
+        .unwrap_or(trimmed.len());
+    trimmed[..end].parse::<i32>().ok()
+}
 
 /// Extract the string value of `key` from a flat JSON object.
 /// e.g. `json_str_field(r#"{"mqtt_broker":"mqtt://x:1883"}"#, "mqtt_broker")`
