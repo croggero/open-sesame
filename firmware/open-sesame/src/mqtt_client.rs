@@ -108,10 +108,6 @@ impl MqttHandle {
                                 None => None,
                             };
 
-                            if let Ok(d) = std::str::from_utf8(data) {
-                                info!("MQTT Rx: {}", d);
-                            }
-
                             let cmd = match suffix {
                                 Some(TOPIC_CONFIG) => std::str::from_utf8(data)
                                     .ok()
@@ -279,18 +275,18 @@ impl MqttHandle {
 // Simple JSON field extractor (no external crate needed for our tiny payloads)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Extract an unquoted numeric value of `key` from a flat JSON object.
-/// e.g. `json_num_field(r#"{"power":100}"#, "power")` → Some(100)
-pub fn json_num_field(json: &str, key: &str) -> Option<i32> {
-    let needle = format!("\"{}\"", key);
-    let start = json.find(&needle)? + needle.len();
-    let after_colon = json[start..].find(':')? + start + 1;
-    let trimmed = json[after_colon..].trim_start();
-    let end = trimmed
-        .find(|c: char| !c.is_ascii_digit() && c != '-')
-        .unwrap_or(trimmed.len());
-    trimmed[..end].parse::<i32>().ok()
-}
+// /// Extract an unquoted numeric value of `key` from a flat JSON object.
+// /// e.g. `json_num_field(r#"{"power":100}"#, "power")` → Some(100)
+// pub fn json_num_field(json: &str, key: &str) -> Option<i32> {
+//     let needle = format!("\"{}\"", key);
+//     let start = json.find(&needle)? + needle.len();
+//     let after_colon = json[start..].find(':')? + start + 1;
+//     let trimmed = json[after_colon..].trim_start();
+//     let end = trimmed
+//         .find(|c: char| !c.is_ascii_digit() && c != '-')
+//         .unwrap_or(trimmed.len());
+//     trimmed[..end].parse::<i32>().ok()
+// }
 
 /// Extract the string value of `key` from a flat JSON object.
 /// e.g. `json_str_field(r#"{"mqtt_broker":"mqtt://x:1883"}"#, "mqtt_broker")`

@@ -24,14 +24,12 @@ dead_zone                   = 4       # Encoder counts/cycle below which door is
 assist_velocity_threshold   = 7.5     # Encoder counts/cycle which the assisted door open/close feature will activate
 lpf_alpha                   = 0.65    # Low-pass filter weight for velocity (0.0–1.0)
 idle_timeout_ms             = 800     # No-motion duration before sleeping motor
-endstop_closed              = 0       # Encoder count at fully-closed position
-endstop_open                = 12_000  # Encoder count at fully-open position
-endstop_ramp_counts         = 500     # Counts before endstop where power ramps down
+ramp_down_counts            = 350      # Counts before target where power ramps down
 operating_power             = 180     # PWM duty for normal operations (0–max_duty)
 calibrate_power             = 120     # PWM duty during auto endstop calibration (lower = gentler)
 stall_ticks                 = 20      # Consecutive no-motion ticks to declare a stall (~200 ms at 10 ms/tick)
 button_debounce_ticks       = 5       # Ticks button must be stable before registering a press (~50 ms)
-invert_direction            = false   # Flip encoder↔open/close mapping
+invert_direction            = true    # Flip encoder↔open/close mapping
 loop_period_ms              = 10      # Control loop tick interval
 calibration_timeout_ticks   = 3_000   # 30 s timeout expressed in ticks (10 ms each)
 calibration_pause_ticks     = 20      # 200 ms pause between directions

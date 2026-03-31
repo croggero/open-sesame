@@ -303,6 +303,7 @@ pub fn run_captive_portal(
                 },
                 mqtt_username: field(&fields, "muser").to_string(),
                 mqtt_password: field(&fields, "mpass").to_string(),
+                opening_counts: 0,
             };
             *sub_post.lock().unwrap() = Some(cfg);
             (HTML_SUCCESS, 200u16)

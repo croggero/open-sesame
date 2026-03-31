@@ -105,10 +105,10 @@ fn main() -> Result<()> {
         esp_idf_hal::reset::restart();
     }
 
-    let config = Config::load(&nvs);
+    let mut config = Config::load(&nvs);
     info!(
-        "Config loaded: ssid={}, broker={}",
-        config.wifi_ssid, config.mqtt_broker
+        "Config loaded: ssid={}, broker={}, opening_counts={}",
+        config.wifi_ssid, config.mqtt_broker, config.opening_counts
     );
 
     // ── WiFi ──────────────────────────────────────────────────────────────────
@@ -150,6 +150,10 @@ fn main() -> Result<()> {
     // ── Door controller ───────────────────────────────────────────────────────
     info!("Starting Door Controller");
     let mut door = DoorController::new(motor, encoder);
+    door.set_opening(config.opening_counts);
+
+    // Drive to the closed endstop to establish encoder zero after power loss.
+    door.start_homing()?;
 
     info!("Entering control loop");
 
@@ -158,6 +162,13 @@ fn main() -> Result<()> {
     loop {
         // ── Control tick ──────────────────────────────────────────────────────
         door.tick()?;
+
+        // Save door opening if changed
+        if door.opening() != config.opening_counts {
+            config.opening_counts = door.opening();
+            info!("Saving opening counts: {}", config.opening_counts);
+            config.save(&mut nvs)?;
+        }
 
         // ── Periodic state publish (state + position + velocity) ──────────────
         tick_count = tick_count.wrapping_add(1);

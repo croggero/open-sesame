@@ -33,6 +33,7 @@ pub struct Config {
     pub mqtt_client_id: String,
     pub mqtt_username: String, // empty = no auth
     pub mqtt_password: String,
+    pub opening_counts: i32,
 }
 
 impl Default for Config {
@@ -44,6 +45,7 @@ impl Default for Config {
             mqtt_client_id: secret!("DEF_MQTT_CLIENT_ID").into(),
             mqtt_username: secret!("DEF_MQTT_USERNAME").into(),
             mqtt_password: secret!("DEF_MQTT_PASSWORD").into(),
+            opening_counts: 0,
         }
     }
 }
@@ -54,7 +56,7 @@ impl Config {
     pub fn load(nvs: &EspNvs<NvsDefault>) -> Self {
         let defaults = Self::default();
 
-        fn read(nvs: &EspNvs<NvsDefault>, key: &str, fallback: &str) -> String {
+        fn read_string(nvs: &EspNvs<NvsDefault>, key: &str, fallback: &str) -> String {
             let mut buf = [0u8; 128];
             nvs.get_str(key, &mut buf)
                 .ok()
@@ -64,13 +66,18 @@ impl Config {
                 .unwrap_or_else(|| fallback.to_string())
         }
 
+        fn read_i32(nvs: &EspNvs<NvsDefault>, key: &str, fallback: i32) -> i32 {
+            nvs.get_i32(key).ok().flatten().unwrap_or_else(|| fallback)
+        }
+
         Self {
-            wifi_ssid: read(nvs, "wifi_ssid", &defaults.wifi_ssid),
-            wifi_password: read(nvs, "wifi_pass", &defaults.wifi_password),
-            mqtt_broker: read(nvs, "mqtt_broker", &defaults.mqtt_broker),
-            mqtt_client_id: read(nvs, "mqtt_id", &defaults.mqtt_client_id),
-            mqtt_username: read(nvs, "mqtt_user", &defaults.mqtt_username),
-            mqtt_password: read(nvs, "mqtt_pass", &defaults.mqtt_password),
+            wifi_ssid: read_string(nvs, "wifi_ssid", &defaults.wifi_ssid),
+            wifi_password: read_string(nvs, "wifi_pass", &defaults.wifi_password),
+            mqtt_broker: read_string(nvs, "mqtt_broker", &defaults.mqtt_broker),
+            mqtt_client_id: read_string(nvs, "mqtt_id", &defaults.mqtt_client_id),
+            mqtt_username: read_string(nvs, "mqtt_user", &defaults.mqtt_username),
+            mqtt_password: read_string(nvs, "mqtt_pass", &defaults.mqtt_password),
+            opening_counts: read_i32(nvs, "opening_counts", defaults.opening_counts),
         }
     }
 
@@ -82,6 +89,7 @@ impl Config {
         nvs.set_str("mqtt_id", &self.mqtt_client_id)?;
         nvs.set_str("mqtt_user", &self.mqtt_username)?;
         nvs.set_str("mqtt_pass", &self.mqtt_password)?;
+        nvs.set_i32("opening_counts", self.opening_counts)?;
         Ok(())
     }
 
@@ -94,6 +102,7 @@ impl Config {
             "mqtt_id",
             "mqtt_user",
             "mqtt_pass",
+            "opening_counts",
         ] {
             let _ = nvs.remove(key); // ignore "not found" errors
         }

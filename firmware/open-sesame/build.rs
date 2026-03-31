@@ -63,9 +63,7 @@ fn main() {
     let door = config.get("door").expect("missing [door] in config.toml");
     for (key, name, ty) in [
         ("dead_zone", "DEAD_ZONE", "i32"),
-        ("endstop_open", "ENDSTOP_OPEN", "i32"),
-        ("endstop_closed", "ENDSTOP_CLOSED", "i32"),
-        ("endstop_ramp_counts", "ENDSTOP_RAMP_COUNTS", "i32"),
+        ("ramp_down_counts", "RAMP_DOWN_COUNTS", "i32"),
         ("operating_power", "OPERATING_POWER", "i32"),
         ("calibrate_power", "CALIBRATE_POWER", "i32"),
         ("stall_ticks", "STALL_TICKS", "u32"),

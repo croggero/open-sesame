@@ -35,8 +35,8 @@ use std::time::{Duration, Instant};
 // All tuning constants live in config.toml and are exposed via crate::config.
 use config::{
     ASSIST_VELOCITY_THRESHOLD, CALIBRATE_POWER, CALIBRATION_PAUSE_TICKS, CALIBRATION_STALL_TICKS,
-    CALIBRATION_TIMEOUT_TICKS, DEAD_ZONE, ENDSTOP_CLOSED, ENDSTOP_OPEN, ENDSTOP_RAMP_COUNTS,
-    IDLE_TIMEOUT_MS, INVERT_DIRECTION, LOOP_PERIOD_MS, LPF_ALPHA, OPERATING_POWER, STALL_TICKS,
+    CALIBRATION_TIMEOUT_TICKS, DEAD_ZONE, IDLE_TIMEOUT_MS, INVERT_DIRECTION, LOOP_PERIOD_MS,
+    LPF_ALPHA, OPERATING_POWER, RAMP_DOWN_COUNTS, STALL_TICKS,
 };
 
 const IDLE_TIMEOUT: Duration = Duration::from_millis(IDLE_TIMEOUT_MS);
@@ -63,6 +63,11 @@ pub enum DoorState {
     Closing,
     Open,
     Closed,
+    /// Boot-up homing: drive toward closed endstop, reset encoder, done.
+    Homing {
+        stall_count: u32,
+        timeout_ticks: u32,
+    },
     Calibrating,
 }
 
@@ -75,6 +80,10 @@ impl DoorState {
             DoorState::Closing => "closing",
             DoorState::Open => "open",
             DoorState::Closed => "closed",
+            DoorState::Homing {
+                stall_count: _,
+                timeout_ticks: _,
+            } => "homing",
             DoorState::Calibrating => "calibrating",
         }
     }
@@ -112,8 +121,7 @@ pub struct DoorController<'d, 'e> {
     velocity: f32,
     last_move_time: Instant,
     target: Option<i32>,
-    endstop_open: i32,
-    endstop_closed: i32,
+    opening_counts: i32,
     /// Active calibration step, or None when not calibrating.
     calibration: Option<CalibrationStep>,
     /// Consecutive no-motion ticks while motor is powered (obstacle detection).
@@ -133,19 +141,11 @@ impl<'d, 'e> DoorController<'d, 'e> {
             velocity: 0.0,
             last_move_time: Instant::now(),
             target: None,
-            endstop_open: ENDSTOP_OPEN,
-            endstop_closed: ENDSTOP_CLOSED,
+            opening_counts: 0,
             calibration: None,
             obstacle_stall_count: 0,
             obstacle_moving_seen: false,
         }
-    }
-
-    /// Override the endstop positions (e.g. after loading calibration from NVS).
-    pub fn set_endstops(&mut self, closed: i32, open: i32) {
-        info!("Endstops set: closed={closed}, open={open}");
-        self.endstop_closed = closed;
-        self.endstop_open = open;
     }
 
     /// Run one tick of the control loop. Call this every ~LOOP_PERIOD.
@@ -170,15 +170,10 @@ impl<'d, 'e> DoorController<'d, 'e> {
         Ok(())
     }
 
-    fn is_endstops_set(&self) -> bool {
-        self.endstop_open != self.endstop_closed
-    }
-
     fn pct_to_counts(&self, target: i32) -> i32 {
-        let range = (self.endstop_open - self.endstop_closed).abs();
-        if range > 0 {
+        if self.opening_counts != 0 {
             let target = target.clamp(0, 100);
-            (target * range) / 100 + self.endstop_closed
+            (target * self.opening_counts) / 100
         } else {
             0
         }
@@ -199,8 +194,18 @@ impl<'d, 'e> DoorController<'d, 'e> {
             }
         }
 
+        // If homing then handle separately
+        if let DoorState::Homing {
+            stall_count,
+            timeout_ticks,
+        } = self.state
+        {
+            self.tick_homing(pos, stall_count, timeout_ticks)?;
+            return Ok(self.state.clone());
+        }
+
         // If no endstops are set then do no motion
-        if !self.is_endstops_set() {
+        if self.opening_counts == 0 {
             self.target = None;
             self.motor.sleep()?;
             return Ok(DoorState::Idle);
@@ -211,25 +216,21 @@ impl<'d, 'e> DoorController<'d, 'e> {
         // opposite direction (e.g. door overshot open endstop, close is still valid).
 
         let at_open = if INVERT_DIRECTION {
-            pos <= self.endstop_open
+            pos <= self.opening_counts
         } else {
-            pos >= self.endstop_open
+            pos >= self.opening_counts
         };
 
-        if at_open && self.target != Some(0) {
+        if at_open && self.target == Some(0) {
             self.target = None;
             self.motor.brake()?;
             self.motor.sleep()?;
             return Ok(DoorState::Open);
         }
 
-        let at_closed = if INVERT_DIRECTION {
-            pos >= self.endstop_closed
-        } else {
-            pos <= self.endstop_closed
-        };
+        let at_closed = if INVERT_DIRECTION { pos >= 0 } else { pos <= 0 };
 
-        if at_closed && self.target != Some(100) {
+        if at_closed && self.target == Some(100) {
             self.target = None;
             self.motor.brake()?;
             self.motor.sleep()?;
@@ -256,12 +257,15 @@ impl<'d, 'e> DoorController<'d, 'e> {
             }
 
             let target_counts = self.pct_to_counts(target_pct);
+
+            // TODO: Check if target and current pos are already withing range and go idle if true
+
             let ramp = self.ramp_factor(pos, target_counts);
             let power = ((OPERATING_POWER as f32 * ramp) as i32).max(1);
 
             // ── Handle Target ────────────────────────────────
             self.motor.wake()?;
-            if pos - target_counts < 0 {
+            if (pos - target_counts) * dir() < 0 {
                 self.motor.set_power(power * dir())?;
                 return Ok(DoorState::Opening);
             } else {
@@ -276,10 +280,11 @@ impl<'d, 'e> DoorController<'d, 'e> {
         if moving {
             self.last_move_time = Instant::now();
 
-            Ok(if self.velocity > ASSIST_VELOCITY_THRESHOLD {
+            let open_vel = self.velocity * dir() as f32;
+            Ok(if open_vel > ASSIST_VELOCITY_THRESHOLD {
                 self.target = Some(100); // Open
                 DoorState::Opening
-            } else if self.velocity < -ASSIST_VELOCITY_THRESHOLD {
+            } else if open_vel < -ASSIST_VELOCITY_THRESHOLD {
                 self.target = Some(0); // Close
                 DoorState::Closing
             } else {
@@ -298,8 +303,8 @@ impl<'d, 'e> DoorController<'d, 'e> {
 
     fn ramp_factor(&self, pos: i32, target: i32) -> f32 {
         let dist = (pos - target).abs();
-        if dist < ENDSTOP_RAMP_COUNTS {
-            dist as f32 / ENDSTOP_RAMP_COUNTS as f32
+        if dist < RAMP_DOWN_COUNTS {
+            dist as f32 / RAMP_DOWN_COUNTS as f32
         } else {
             1.0
         }
@@ -340,6 +345,58 @@ impl<'d, 'e> DoorController<'d, 'e> {
     }
 
     // ── Calibration ───────────────────────────────────────────────────────────
+
+    /// Drive toward the closed endstop at CALIBRATE_POWER until stall, then
+    /// reset the encoder to zero. Call on boot to establish a known position
+    /// after a power loss.
+    pub fn start_homing(&mut self) -> Result<()> {
+        info!("Homing: driving to closed endstop");
+        self.target = None;
+        self.motor.wake()?;
+        self.motor.set_power(-CALIBRATE_POWER * dir())?;
+        self.state = DoorState::Homing {
+            stall_count: 0,
+            timeout_ticks: 0,
+        };
+        Ok(())
+    }
+
+    fn tick_homing(&mut self, pos: i32, stall_count: u32, timeout_ticks: u32) -> Result<()> {
+        let delta = (pos - self.last_pos).abs();
+        let timeout_ticks = timeout_ticks + 1;
+        if timeout_ticks >= CALIBRATION_TIMEOUT_TICKS {
+            log::error!("Homing: timeout waiting for closed stall");
+            self.motor.brake()?;
+            self.motor.sleep()?;
+            // Set to zero anyways, the door should have moved.
+            // The user will intervene to fix issue.
+            self.encoder.reset();
+            self.last_pos = 0;
+            self.state = DoorState::Idle;
+        } else if delta <= DEAD_ZONE as i32 {
+            let stall_count = stall_count + 1;
+            if stall_count >= CALIBRATION_STALL_TICKS {
+                info!("Homing: closed endstop found, resetting encoder to 0");
+                self.motor.brake()?;
+                self.motor.sleep()?;
+                self.encoder.reset();
+                self.last_pos = 0;
+                return self.stop();
+            } else {
+                self.state = DoorState::Homing {
+                    stall_count,
+                    timeout_ticks,
+                };
+            }
+        } else {
+            self.state = DoorState::Homing {
+                stall_count: 0,
+                timeout_ticks,
+            };
+        }
+
+        Ok(())
+    }
 
     /// Begin auto-calibration. The sequence runs non-blocking through tick():
     ///   1. Drive toward closed at CALIBRATE_POWER → stall → reset encoder to 0
@@ -441,7 +498,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
                         let endstop_open = self.encoder.read();
                         self.motor.brake()?;
                         self.motor.sleep()?;
-                        self.set_endstops(0, endstop_open);
+                        self.set_opening(endstop_open);
                         info!("Calibration complete: closed=0, open={endstop_open}");
                         self.state = DoorState::Open;
                         None
@@ -477,10 +534,9 @@ impl<'d, 'e> DoorController<'d, 'e> {
     }
 
     pub fn position_pct(&self) -> i32 {
-        let range = (self.endstop_open - self.endstop_closed).abs();
-        if range > 0 {
+        if self.opening_counts != 0 {
             let position = self.position();
-            let pct = (position - self.endstop_closed) * 100 / range;
+            let pct = position * 100 / self.opening_counts;
             pct.clamp(0, 100)
         } else {
             0
@@ -493,6 +549,15 @@ impl<'d, 'e> DoorController<'d, 'e> {
 
     pub fn power(&self) -> i32 {
         self.motor.get_power()
+    }
+
+    pub fn set_opening(&mut self, opening: i32) {
+        info!("Opening set: open={opening}");
+        self.opening_counts = opening;
+    }
+
+    pub fn opening(&self) -> i32 {
+        self.opening_counts
     }
 
     pub fn loop_period() -> Duration {
