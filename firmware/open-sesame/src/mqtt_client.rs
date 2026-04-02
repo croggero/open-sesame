@@ -11,7 +11,7 @@ use log::{info, warn};
 
 // Subscribed Topics
 pub const TOPIC_CONFIG: &str = "config/set";
-pub const TOPIC_COMMAND: &str = "command"; // payload: "open" | "close" | "stop" | "calibrate"
+pub const TOPIC_COMMAND: &str = "command"; // payload: "open" | "close" | "stop" | "calibrate" | "home"
 pub const TOPIC_SET_POSITION: &str = "position/set";
 
 // Published Topics
@@ -36,10 +36,9 @@ pub enum MqttCommand {
     Stop,
     /// Auto-detect endstops by driving to each end and watching for stall.
     Calibrate,
+    /// Perform home on door requested.
+    Home,
 }
-
-// How many control ticks between telemetry publishes (10 ms × 50 = 500 ms).
-pub const TELEMETRY_EVERY_N_TICKS: u32 = 100;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MqttHandle
@@ -122,6 +121,7 @@ impl MqttHandle {
                                         "close" => Some(MqttCommand::Close),
                                         "stop" => Some(MqttCommand::Stop),
                                         "calibrate" => Some(MqttCommand::Calibrate),
+                                        "home" => Some(MqttCommand::Home),
                                         other => {
                                             warn!("Unknown command: {}", other);
                                             None
@@ -245,9 +245,26 @@ impl MqttHandle {
             device = device,
         );
 
+        // ── Button: home ─────────────────────────────────────────────────
+        let home_topic = format!("homeassistant/button/{}_home/config", client_id);
+        let home_payload = format!(
+            r#"{{
+                "name":"Home Door",
+                "unique_id":"{id}_home",
+                "command_topic":"{cmd}",
+                "payload_press":"home",
+                "entity_category":"config",
+                "device":{device}
+            }}"#,
+            id = client_id,
+            cmd = command_topic,
+            device = device,
+        );
+
         for (topic, payload) in [
             (cover_topic, cover_payload),
             (calibrate_topic, calibrate_payload),
+            (home_topic, home_payload),
         ] {
             if let Err(e) = self
                 .client

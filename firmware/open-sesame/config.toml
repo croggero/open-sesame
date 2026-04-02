@@ -17,20 +17,23 @@ led           = 21     # On-board status LED (active-high)
 pwm_freq_hz = 20_000   # Above audible range
 mode        = "PhEn"   # "PhEn" or "InIn" — must match hardware MODE pin
 min_duty    = 30       # Minimum PWM to overcome motor stiction (0–255)
-max_duty    = 100      # Maximum PWM to control speed
+max_duty    = 200      # Maximum PWM to control speed
 
 [door]
+loop_period_ms              = 10      # Control loop tick interval
 dead_zone                   = 4       # Encoder counts/cycle below which door is "stationary", used for assisted motion
 assist_velocity_threshold   = 7.5     # Encoder counts/cycle which the assisted door open/close feature will activate
 lpf_alpha                   = 0.65    # Low-pass filter weight for velocity (0.0–1.0)
 idle_timeout_ms             = 800     # No-motion duration before sleeping motor
-ramp_down_counts            = 350      # Counts before target where power ramps down
-operating_power             = 180     # PWM duty for normal operations (0–max_duty)
-calibrate_power             = 120     # PWM duty during auto endstop calibration (lower = gentler)
-stall_ticks                 = 20      # Consecutive no-motion ticks to declare a stall (~200 ms at 10 ms/tick)
-button_debounce_ticks       = 5       # Ticks button must be stable before registering a press (~50 ms)
+ramp_down_counts            = 250     # Counts before target where power ramps down
+operating_power             = 160     # PWM duty for normal operations (0–max_duty)
+initial_opening             = -3625   # The intial opening when flashed. This will be overwritten if calibration is performed.
 invert_direction            = true    # Flip encoder↔open/close mapping
-loop_period_ms              = 10      # Control loop tick interval
+stall_ticks                 = 10      # Consecutive no-motion ticks to declare a stall (~200 ms at 10 ms/tick)
+calibrate_power             = 120     # PWM duty during auto endstop calibration (lower = gentler)
 calibration_timeout_ticks   = 3_000   # 30 s timeout expressed in ticks (10 ms each)
 calibration_pause_ticks     = 20      # 200 ms pause between directions
 calibration_stall_ticks     = 80      # Consecutive no-motion ticks to declare a stall (~800 ms at 10 ms/tick)
+close_homing                = true    # After closing, stall into the physical stop and reset encoder to correct drift
+button_debounce_ticks       = 5       # Ticks button must be stable before registering a press (~50 ms)
+telemetry_ticks             = 100     # How many control ticks between telemetry publishes (10 ms × 100 = 1000 ms).

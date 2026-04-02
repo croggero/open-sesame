@@ -45,7 +45,7 @@ impl Default for Config {
             mqtt_client_id: secret!("DEF_MQTT_CLIENT_ID").into(),
             mqtt_username: secret!("DEF_MQTT_USERNAME").into(),
             mqtt_password: secret!("DEF_MQTT_PASSWORD").into(),
-            opening_counts: 0,
+            opening_counts: INITIAL_OPENING,
         }
     }
 }

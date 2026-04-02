@@ -62,13 +62,14 @@ fn main() {
     // [door]
     let door = config.get("door").expect("missing [door] in config.toml");
     for (key, name, ty) in [
+        ("loop_period_ms", "LOOP_PERIOD_MS", "u64"),
         ("dead_zone", "DEAD_ZONE", "i32"),
         ("ramp_down_counts", "RAMP_DOWN_COUNTS", "i32"),
         ("operating_power", "OPERATING_POWER", "i32"),
-        ("calibrate_power", "CALIBRATE_POWER", "i32"),
+        ("initial_opening", "INITIAL_OPENING", "i32"),
         ("stall_ticks", "STALL_TICKS", "u32"),
         ("idle_timeout_ms", "IDLE_TIMEOUT_MS", "u64"),
-        ("loop_period_ms", "LOOP_PERIOD_MS", "u64"),
+        ("calibrate_power", "CALIBRATE_POWER", "i32"),
         (
             "calibration_timeout_ticks",
             "CALIBRATION_TIMEOUT_TICKS",
@@ -77,6 +78,7 @@ fn main() {
         ("calibration_pause_ticks", "CALIBRATION_PAUSE_TICKS", "u32"),
         ("calibration_stall_ticks", "CALIBRATION_STALL_TICKS", "u32"),
         ("button_debounce_ticks", "BUTTON_DEBOUNCE_TICKS", "u32"),
+        ("telemetry_ticks", "TELEMETRY_TICKS", "u32"),
     ] {
         let v = door
             .get(key)
@@ -97,7 +99,10 @@ fn main() {
         writeln!(gen, "pub const {name}: f32 = {literal};").unwrap();
     }
 
-    for (key, name) in [("invert_direction", "INVERT_DIRECTION")] {
+    for (key, name) in [
+        ("invert_direction", "INVERT_DIRECTION"),
+        ("close_homing", "CLOSE_HOMING"),
+    ] {
         let v = door
             .get(key)
             .unwrap_or_else(|| panic!("missing door.{key}"));

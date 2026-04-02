@@ -37,7 +37,7 @@ use config::Config;
 use door_controller::{DoorController, DoorState};
 use encoder::Encoder;
 use motor::MotorDriver;
-use mqtt_client::{json_str_field, MqttCommand, MqttHandle, TELEMETRY_EVERY_N_TICKS};
+use mqtt_client::{json_str_field, MqttCommand, MqttHandle};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -172,7 +172,7 @@ fn main() -> Result<()> {
 
         // ── Periodic state publish (state + position + velocity) ──────────────
         tick_count = tick_count.wrapping_add(1);
-        if tick_count % TELEMETRY_EVERY_N_TICKS == 0 {
+        if tick_count % config::TELEMETRY_TICKS == 0 {
             mqtt.publish_state(&door);
         }
 
@@ -222,6 +222,10 @@ fn main() -> Result<()> {
                 MqttCommand::Calibrate => {
                     info!("Calibration requested via MQTT");
                     door.start_calibrate()?;
+                }
+                MqttCommand::Home => {
+                    info!("Home requested via MQTT");
+                    door.start_homing()?;
                 }
             }
         }
