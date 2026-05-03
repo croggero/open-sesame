@@ -8,3 +8,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
 # Workaround for https://github.com/espressif/esp-idf/issues/7631
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
+
+# Allow LWIP's DNS resolver to consult the mDNS responder for *.local hostnames
+# (e.g. mqtt://my-broker.local:1883). Requires EspMdns::take() at runtime.
+CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y

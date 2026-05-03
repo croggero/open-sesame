@@ -19,6 +19,7 @@ use esp_idf_hal::{
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
+    mdns::EspMdns,
     nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault},
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
@@ -49,6 +50,13 @@ fn main() -> Result<()> {
 
     // Initialise the ESP-IDF logger (output via UART0 / USB-JTAG)
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    // Door control must outrank app threads (mqtt-tx, mqtt-rx, wifi-mon all
+    // default to 5). Stay below WiFi (23) / esp_timer (22) / LWIP (18) so the
+    // radio and timer dispatch keep running.
+    unsafe {
+        esp_idf_svc::sys::vTaskPrioritySet(std::ptr::null_mut(), 10);
+    }
 
     info!("=== Open Sesame booting ===");
 
@@ -115,6 +123,15 @@ fn main() -> Result<()> {
     info!("Connecting to Wifi");
     let wifi = connect_wifi(peripherals.modem, sysloop.clone(), &config)?;
     info!("WiFi connected");
+
+    // Hand ownership to a background monitor thread that auto-reconnects on drop.
+    // The main control loop never touches wifi again — keeps door safety isolated.
+    spawn_wifi_monitor(wifi);
+
+    // Start mDNS so LWIP's DNS resolver can resolve *.local broker hostnames.
+    // Bound to a variable kept alive for the program's lifetime — dropping it
+    // would tear down the responder.
+    let _mdns = EspMdns::take()?;
 
     // ── Toggle button ─────────────────────────────────────────────────────────
     let mut toggle_btn = PinDriver::input(unsafe { AnyIOPin::new(config::PIN_TOGGLE) })?;
@@ -212,7 +229,6 @@ fn main() -> Result<()> {
                     apply_remote_config(&json, &mut nvs)?;
                     info!("New config saved. Restarting...");
                     std::thread::sleep(Duration::from_millis(500));
-                    drop(wifi); // graceful disconnect
                     esp_idf_hal::reset::restart();
                 }
                 MqttCommand::Position(pos) => door.set_position(pos)?,
@@ -282,6 +298,43 @@ fn connect_wifi(
 
 fn warn_wifi(e: impl std::fmt::Debug) {
     warn!("WiFi connect error: {:?}", e);
+}
+
+/// Background thread that watches the WiFi link and reconnects on drop.
+///
+/// Runs on its own thread so a reconnect storm (which can block for many
+/// seconds inside `wifi.connect()`) cannot stall the safety-critical door
+/// control loop. MQTT auto-reconnects on its own once WiFi is back, and the
+/// existing `MqttCommand::Connected` path re-subscribes + re-publishes HA
+/// discovery.
+fn spawn_wifi_monitor(mut wifi: BlockingWifi<EspWifi<'static>>) {
+    std::thread::Builder::new()
+        .name("wifi-mon".into())
+        .stack_size(8192)
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(5));
+
+            if matches!(wifi.is_connected(), Ok(true)) {
+                continue;
+            }
+
+            warn!("WiFi link down — attempting reconnect");
+            let mut backoff = Duration::from_secs(2);
+            loop {
+                match wifi.connect().and_then(|_| wifi.wait_netif_up()) {
+                    Ok(_) => {
+                        info!("WiFi reconnected");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("WiFi reconnect failed: {:?} — retry in {:?}", e, backoff);
+                        std::thread::sleep(backoff);
+                        backoff = (backoff * 2).min(Duration::from_secs(30));
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn wifi-mon thread");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

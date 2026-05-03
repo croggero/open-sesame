@@ -44,14 +44,29 @@ pub enum MqttCommand {
 // MqttHandle
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Request sent from the door loop to the dedicated MQTT publisher thread.
+/// Keeps all blocking client calls (publish / subscribe) off the control loop.
+enum MqttRequest {
+    Publish {
+        topic: String,
+        payload: Vec<u8>,
+        qos: QoS,
+        retain: bool,
+    },
+    Subscribe {
+        topic: String,
+        qos: QoS,
+    },
+}
+
 pub struct MqttHandle {
-    client: EspMqttClient<'static>,
+    tx: std::sync::mpsc::Sender<MqttRequest>,
     topic_prefix: String,
 }
 
 impl MqttHandle {
-    /// Create the MQTT client, start the background receive thread, and publish
-    /// the Home Assistant discovery payload.
+    /// Create the MQTT client, spawn the publisher thread that owns it, and
+    /// return a handle whose I/O methods are all non-blocking channel sends.
     pub fn connect(cfg: &Config) -> Result<(Self, EspMqttConnection)> {
         let mqtt_cfg = MqttClientConfiguration {
             client_id: Some(cfg.mqtt_client_id.as_str()),
@@ -69,17 +84,41 @@ impl MqttHandle {
             ..Default::default()
         };
 
-        let (client, connection) = EspMqttClient::new(&cfg.mqtt_broker, &mqtt_cfg)?;
+        let (mut client, connection) = EspMqttClient::new(&cfg.mqtt_broker, &mqtt_cfg)?;
         info!("MQTT connecting to {}", cfg.mqtt_broker);
 
+        let (tx, rx) = std::sync::mpsc::channel::<MqttRequest>();
+
+        std::thread::Builder::new()
+            .name("mqtt-tx".into())
+            .stack_size(4096)
+            .spawn(move || {
+                while let Ok(req) = rx.recv() {
+                    match req {
+                        MqttRequest::Publish {
+                            topic,
+                            payload,
+                            qos,
+                            retain,
+                        } => {
+                            if let Err(e) = client.publish(&topic, qos, retain, &payload) {
+                                warn!("Publish failed on {}: {:?}", topic, e);
+                            }
+                        }
+                        MqttRequest::Subscribe { topic, qos } => {
+                            if let Err(e) = client.subscribe(&topic, qos) {
+                                warn!("Subscribe failed on {}: {:?}", topic, e);
+                            } else {
+                                info!("Subscribed to {}", topic);
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("failed to spawn mqtt-tx thread");
+
         let topic_prefix = cfg.mqtt_client_id.clone();
-        Ok((
-            Self {
-                client,
-                topic_prefix,
-            },
-            connection,
-        ))
+        Ok((Self { tx, topic_prefix }, connection))
     }
 
     /// Spawn the receive thread. Must be called once after `connect()`.
@@ -157,6 +196,9 @@ impl MqttHandle {
 
     /// Publish door state, position, and velocity as a single JSON payload.
     /// `pos_pct` (0–100) is included for the HA cover position template.
+    ///
+    /// Telemetry only — fire-and-forget (QoS 0, no retain) so a slow or
+    /// unreachable broker can never back-pressure the door control loop.
     pub fn publish_state(&mut self, door: &DoorController) {
         let position = door.position();
         let state = door.state();
@@ -174,14 +216,12 @@ impl MqttHandle {
             power
         );
 
-        if let Err(e) = self.client.publish(
-            &full_topic,
-            QoS::AtLeastOnce,
-            true, // retain
-            payload.as_bytes(),
-        ) {
-            warn!("Failed to publish state: {:?}", e);
-        }
+        let _ = self.tx.send(MqttRequest::Publish {
+            topic: full_topic,
+            payload: payload.into_bytes(),
+            qos: QoS::AtMostOnce,
+            retain: false,
+        });
     }
 
     /// Publish Home Assistant MQTT Discovery config (call once after connecting).
@@ -266,14 +306,12 @@ impl MqttHandle {
             (calibrate_topic, calibrate_payload),
             (home_topic, home_payload),
         ] {
-            if let Err(e) = self
-                .client
-                .publish(&topic, QoS::AtLeastOnce, true, payload.as_bytes())
-            {
-                warn!("HA discovery publish failed on {}: {:?}", topic, e);
-            } else {
-                info!("HA discovery published: {}", topic);
-            }
+            let _ = self.tx.send(MqttRequest::Publish {
+                topic,
+                payload: payload.into_bytes(),
+                qos: QoS::AtLeastOnce,
+                retain: true,
+            });
         }
     }
 
@@ -281,8 +319,12 @@ impl MqttHandle {
     pub fn subscribe_commands(&mut self) -> Result<()> {
         for topic in [TOPIC_CONFIG, TOPIC_COMMAND, TOPIC_SET_POSITION] {
             let full_topic = format!("{}/{}", self.topic_prefix, topic);
-            self.client.subscribe(&full_topic, QoS::AtLeastOnce)?;
-            info!("Subscribed to {}", topic);
+            self.tx
+                .send(MqttRequest::Subscribe {
+                    topic: full_topic,
+                    qos: QoS::AtLeastOnce,
+                })
+                .map_err(|e| anyhow::anyhow!("MQTT publisher thread gone: {e}"))?;
         }
         Ok(())
     }
