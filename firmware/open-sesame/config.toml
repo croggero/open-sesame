@@ -17,7 +17,7 @@ led           = 21     # On-board status LED (active-high)
 pwm_freq_hz = 20_000   # Above audible range
 mode        = "PhEn"   # "PhEn" or "InIn" — must match hardware MODE pin
 min_duty    = 30       # Minimum PWM to overcome motor stiction (0–255)
-max_duty    = 200      # Maximum PWM to control speed
+max_duty    = 250      # Maximum PWM to control speed
 
 [door]
 loop_period_ms              = 10      # Control loop tick interval
