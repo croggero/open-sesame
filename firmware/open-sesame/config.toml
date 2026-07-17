@@ -32,7 +32,8 @@ invert_direction            = true    # Flip encoder↔open/close mapping
 stall_ticks                 = 10      # Consecutive no-motion ticks to declare a stall (~200 ms at 10 ms/tick)
 stall_grace_ticks           = 30      # Ticks after a target is set before stall detection arms, so the door has time to accelerate from rest without tripping the obstacle check.
 assist_lockout_ticks        = 100     # Ticks after an obstacle stop before assist re-arms (~1 s at 10 ms/tick). The door recoils off the obstruction, and that recoil reads as a manual push.
-settle_ticks                = 1000       # Consecutive stationary ticks required to leave Stopping (~1 s), so a recoil cannot be mistaken for "stopped".
+settle_ticks                = 100     # Consecutive stationary ticks required to leave Stopping (~1 s), so a recoil cannot be mistaken for "stopped".
+reversal_pause_ticks        = 50      # Consecutive stationary ticks required before a command that reverses a moving door starts driving (~500 ms). The door is coasting, not recoiling off an obstacle, so it needs far less settling than settle_ticks.
 calibrate_power             = 120     # PWM duty during auto endstop calibration (lower = gentler)
 calibration_timeout_ticks   = 3_000   # 30 s timeout expressed in ticks (10 ms each)
 calibration_pause_ticks     = 20      # 200 ms pause between directions

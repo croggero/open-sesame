@@ -71,6 +71,7 @@ fn main() {
         ("stall_grace_ticks", "STALL_GRACE_TICKS", "u32"),
         ("assist_lockout_ticks", "ASSIST_LOCKOUT_TICKS", "u32"),
         ("settle_ticks", "SETTLE_TICKS", "u32"),
+        ("reversal_pause_ticks", "REVERSAL_PAUSE_TICKS", "u32"),
         ("idle_timeout_ms", "IDLE_TIMEOUT_MS", "u64"),
         ("calibrate_power", "CALIBRATE_POWER", "i32"),
         (

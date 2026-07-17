@@ -37,7 +37,7 @@ use config::{
     ASSIST_LOCKOUT_TICKS, ASSIST_VELOCITY_THRESHOLD, CALIBRATE_POWER, CALIBRATION_PAUSE_TICKS,
     CALIBRATION_STALL_TICKS, CALIBRATION_TIMEOUT_TICKS, CLOSED_THRESHOLD, CLOSE_HOMING, DEAD_ZONE,
     IDLE_TIMEOUT_MS, INVERT_DIRECTION, LOOP_PERIOD_MS, LPF_ALPHA, OPERATING_POWER,
-    RAMP_DOWN_COUNTS, SETTLE_TICKS, STALL_GRACE_TICKS, STALL_TICKS,
+    RAMP_DOWN_COUNTS, REVERSAL_PAUSE_TICKS, SETTLE_TICKS, STALL_GRACE_TICKS, STALL_TICKS,
 };
 
 const IDLE_TIMEOUT: Duration = Duration::from_millis(IDLE_TIMEOUT_MS);
@@ -134,6 +134,9 @@ pub struct DoorController<'d, 'e> {
     assist_lockout: u32,
     /// Consecutive stationary ticks accumulated in the Stopping state.
     settle_count: u32,
+    /// Target to adopt once the door has coasted to a stop, set when a command
+    /// asks a moving door to reverse.
+    pending_target: Option<i32>,
 }
 
 impl<'d, 'e> DoorController<'d, 'e> {
@@ -152,6 +155,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
             drive_ticks: 0,
             assist_lockout: 0,
             settle_count: 0,
+            pending_target: None,
         }
     }
 
@@ -195,15 +199,28 @@ impl<'d, 'e> DoorController<'d, 'e> {
             // A stalled door already reads as stationary, so one quiet tick means
             // nothing — the door has not yet recoiled off whatever it hit. Hold
             // Stopping until the motion is settled for real before handing back
-            // to assist, since coasting leaves the recoil undamped.
+            // to assist, since coasting leaves the recoil undamped. A reversal
+            // is only coasting down from a commanded move, with nothing to
+            // recoil off, so it waits out the much shorter pause.
+            let settle_target = if self.pending_target.is_some() {
+                REVERSAL_PAUSE_TICKS
+            } else {
+                SETTLE_TICKS
+            };
             self.settle_count += 1;
-            if self.settle_count < SETTLE_TICKS {
+            if self.settle_count < settle_target {
                 return Ok(DoorState::Stopping);
             }
 
             info!("Door stopped");
             self.settle_count = 0;
             self.motor.sleep()?;
+
+            if let Some(pending) = self.pending_target.take() {
+                info!("Resuming target {pending} after reversal");
+                self.set_position(pending)?;
+                return Ok(DoorState::Idle);
+            }
 
             return Ok(if self.at_open(pos) {
                 DoorState::Open
@@ -385,11 +402,44 @@ impl<'d, 'e> DoorController<'d, 'e> {
             return Ok(());
         }
 
+        // Driving straight at a target that lies behind a door already moving under
+        // power flips the H-bridge from full duty one way to full duty the other,
+        // and the rack and pinion takes that whole reversal as a shock load. Coast
+        // to a stop first and pick the target back up once the door is settled.
+        if self.reverses_motion(pos) {
+            info!("Target {} reverses door motion — coasting first", pos);
+            self.pending_target = Some(pos);
+            self.target = None;
+            self.settle_count = 0;
+            self.motor.brake()?;
+            self.motor.sleep()?;
+            self.state = DoorState::Stopping;
+            return Ok(());
+        }
+
         info!("Setting target position to: {}", pos);
         self.target = Some(pos);
+        self.pending_target = None;
         self.obstacle_stall_count = 0;
         self.drive_ticks = 0;
         Ok(())
+    }
+
+    /// True when reaching `target_pct` means driving against the direction the
+    /// door is currently travelling at speed.
+    fn reverses_motion(&self, target_pct: i32) -> bool {
+        if self.opening_counts == 0 {
+            return false;
+        }
+
+        let open_vel = self.velocity * dir() as f32;
+        if open_vel.abs() as i32 <= DEAD_ZONE {
+            return false;
+        }
+
+        let target_counts = self.pct_to_counts(target_pct);
+        let target_opens = (self.position() - target_counts) * dir() < 0;
+        target_opens != (open_vel > 0.0)
     }
 
     /// Start driving the door toward the open endstop.
@@ -409,6 +459,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
     pub fn stop(&mut self) -> Result<()> {
         info!("Setting Target to: Stopping");
         self.target = None;
+        self.pending_target = None;
         self.settle_count = 0;
         self.motor.brake()?;
         self.motor.sleep()?;
@@ -424,6 +475,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
     pub fn start_homing(&mut self) -> Result<()> {
         info!("Homing: driving to closed endstop");
         self.target = None;
+        self.pending_target = None;
         self.motor.wake()?;
         self.motor.set_power(-CALIBRATE_POWER * dir())?;
         self.state = DoorState::Homing {
@@ -485,6 +537,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
         info!("Calibration: starting — driving to closed endstop");
 
         self.target = None;
+        self.pending_target = None;
         self.state = DoorState::Calibrating;
         self.motor.wake()?;
         self.motor.set_power(-CALIBRATE_POWER * dir())?;
