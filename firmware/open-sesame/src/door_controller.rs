@@ -34,14 +34,14 @@ use std::time::{Duration, Instant};
 
 // All tuning constants live in config.toml and are exposed via crate::config.
 use config::{
-    ASSIST_VELOCITY_THRESHOLD, CALIBRATE_POWER, CALIBRATION_PAUSE_TICKS, CALIBRATION_STALL_TICKS,
-    CALIBRATION_TIMEOUT_TICKS, CLOSE_HOMING, DEAD_ZONE, IDLE_TIMEOUT_MS, INVERT_DIRECTION,
-    LOOP_PERIOD_MS, LPF_ALPHA, OPERATING_POWER, RAMP_DOWN_COUNTS, STALL_TICKS,
+    ASSIST_LOCKOUT_TICKS, ASSIST_VELOCITY_THRESHOLD, CALIBRATE_POWER, CALIBRATION_PAUSE_TICKS,
+    CALIBRATION_STALL_TICKS, CALIBRATION_TIMEOUT_TICKS, CLOSED_THRESHOLD, CLOSE_HOMING, DEAD_ZONE,
+    IDLE_TIMEOUT_MS, INVERT_DIRECTION, LOOP_PERIOD_MS, LPF_ALPHA, OPERATING_POWER,
+    RAMP_DOWN_COUNTS, SETTLE_TICKS, STALL_GRACE_TICKS, STALL_TICKS,
 };
 
 const IDLE_TIMEOUT: Duration = Duration::from_millis(IDLE_TIMEOUT_MS);
 const LOOP_PERIOD: Duration = Duration::from_millis(LOOP_PERIOD_MS);
-const CLOSED_THRESHOLD: i32 = 50;
 
 /// Returns 1 or -1 based on INVERT_DIRECTION.
 const fn dir() -> i32 {
@@ -127,9 +127,13 @@ pub struct DoorController<'d, 'e> {
     calibration: Option<CalibrationStep>,
     /// Consecutive no-motion ticks while motor is powered (obstacle detection).
     obstacle_stall_count: u32,
-    /// True once we have seen movement after a door target was set.
-    /// Prevents false triggers during motor spin-up.
-    obstacle_moving_seen: bool,
+    /// Ticks since the current target was set. Stall detection is suppressed
+    /// until this exceeds STALL_GRACE_TICKS.
+    drive_ticks: u32,
+    /// Ticks remaining before assist re-arms. Non-zero after an obstacle stop.
+    assist_lockout: u32,
+    /// Consecutive stationary ticks accumulated in the Stopping state.
+    settle_count: u32,
 }
 
 impl<'d, 'e> DoorController<'d, 'e> {
@@ -145,7 +149,9 @@ impl<'d, 'e> DoorController<'d, 'e> {
             opening_counts: 0,
             calibration: None,
             obstacle_stall_count: 0,
-            obstacle_moving_seen: false,
+            drive_ticks: 0,
+            assist_lockout: 0,
+            settle_count: 0,
         }
     }
 
@@ -155,6 +161,7 @@ impl<'d, 'e> DoorController<'d, 'e> {
         let raw_velocity = (current_pos - self.last_pos) as f32;
 
         self.velocity = LPF_ALPHA * self.velocity + (1.0 - LPF_ALPHA) * raw_velocity;
+        self.assist_lockout = self.assist_lockout.saturating_sub(1);
 
         let prev_state = self.state.clone();
         if self.calibration.is_some() {
@@ -176,21 +183,35 @@ impl<'d, 'e> DoorController<'d, 'e> {
         if self.state == DoorState::Stopping {
             let moving = self.velocity.abs() as i32 > DEAD_ZONE;
             if moving {
-                // If door has not stopped then let it continue stopping.
+                // Coast rather than hold the brake: dropping nSLP lets the door
+                // decelerate on its own. Holding an active brake against a door
+                // still moving at speed jams the drivetrain.
+                self.settle_count = 0;
                 self.motor.brake()?;
                 self.motor.sleep()?;
                 return Ok(DoorState::Stopping);
-            } else {
-                info!("Door stopped");
-
-                return Ok(if self.at_open(pos) {
-                    DoorState::Open
-                } else if self.at_closed(pos) {
-                    DoorState::Closed
-                } else {
-                    DoorState::Idle
-                });
             }
+
+            // A stalled door already reads as stationary, so one quiet tick means
+            // nothing — the door has not yet recoiled off whatever it hit. Hold
+            // Stopping until the motion is settled for real before handing back
+            // to assist, since coasting leaves the recoil undamped.
+            self.settle_count += 1;
+            if self.settle_count < SETTLE_TICKS {
+                return Ok(DoorState::Stopping);
+            }
+
+            info!("Door stopped");
+            self.settle_count = 0;
+            self.motor.sleep()?;
+
+            return Ok(if self.at_open(pos) {
+                DoorState::Open
+            } else if self.at_closed(pos) {
+                DoorState::Closed
+            } else {
+                DoorState::Idle
+            });
         }
 
         // If homing then handle separately
@@ -239,17 +260,18 @@ impl<'d, 'e> DoorController<'d, 'e> {
 
         if let Some(target_pct) = self.target {
             // ── Obstacle detection ────────────────────────────────────────────
-            // Wait for first movement after motor starts, then watch for stall.
+            //Count consecutive no-motion ticks while powered, after a grace period for spin-up.
+            self.drive_ticks += 1;
             if self.velocity.abs() as i32 > DEAD_ZONE {
-                self.obstacle_moving_seen = true;
                 self.obstacle_stall_count = 0;
-            } else if self.obstacle_moving_seen {
+            } else if self.drive_ticks > STALL_GRACE_TICKS {
                 self.obstacle_stall_count += 1;
                 if self.obstacle_stall_count >= STALL_TICKS {
                     log::warn!("Obstacle detected — stopping motor");
                     self.target = None;
                     self.obstacle_stall_count = 0;
-                    self.obstacle_moving_seen = false;
+                    self.assist_lockout = ASSIST_LOCKOUT_TICKS;
+                    self.settle_count = 0;
                     self.motor.brake()?;
                     self.motor.sleep()?;
                     return Ok(DoorState::Stopping);
@@ -277,20 +299,30 @@ impl<'d, 'e> DoorController<'d, 'e> {
         // ── Assist mode (manual push/pull detection) ──────────────────────────
         let moving = self.velocity.abs() as i32 > DEAD_ZONE;
 
+        // The door recoils off whatever it just stalled against, and that recoil is
+        // indistinguishable from a manual push. Stay disarmed until it settles,
+        // otherwise an obstacle while opening immediately drives the door closed.
+        if self.assist_lockout > 0 {
+            if moving {
+                self.last_move_time = Instant::now();
+            }
+            return Ok(self.state.clone());
+        }
+
         if moving {
             self.last_move_time = Instant::now();
 
             let open_vel = self.velocity * dir() as f32;
-            Ok(if open_vel > ASSIST_VELOCITY_THRESHOLD && !at_open {
-                self.target = Some(100); // Open
-                DoorState::Opening
+            if open_vel > ASSIST_VELOCITY_THRESHOLD && !at_open {
+                self.set_position(100)?; // Open
+                Ok(DoorState::Opening)
             } else if open_vel < -ASSIST_VELOCITY_THRESHOLD && !at_closed {
-                self.target = Some(0); // Close
-                DoorState::Closing
+                self.set_position(0)?; // Close
+                Ok(DoorState::Closing)
             } else {
                 self.target = None;
-                DoorState::Idle
-            })
+                Ok(DoorState::Idle)
+            }
         } else if self.last_move_time.elapsed() > IDLE_TIMEOUT {
             if self.motor.is_awake() {
                 self.motor.sleep()?;
@@ -347,10 +379,16 @@ impl<'d, 'e> DoorController<'d, 'e> {
     /// Set the door to a certain postion between its endstops (0 = closed, 100 = open)
     pub fn set_position(&mut self, pos: i32) -> Result<()> {
         let pos = pos.clamp(0, 100);
+
+        // There is no need to set the target again, which would cause the stall detection to reset.
+        if self.target == Some(pos) {
+            return Ok(());
+        }
+
         info!("Setting target position to: {}", pos);
         self.target = Some(pos);
         self.obstacle_stall_count = 0;
-        self.obstacle_moving_seen = false;
+        self.drive_ticks = 0;
         Ok(())
     }
 
@@ -366,10 +404,12 @@ impl<'d, 'e> DoorController<'d, 'e> {
         self.set_position(0)
     }
 
-    /// Stop and clear any door target. Motor sleeps.
+    /// Stop and clear any door target. The motor coasts; the Stopping state waits
+    /// for motion to settle before declaring the door stopped.
     pub fn stop(&mut self) -> Result<()> {
         info!("Setting Target to: Stopping");
         self.target = None;
+        self.settle_count = 0;
         self.motor.brake()?;
         self.motor.sleep()?;
         self.state = DoorState::Stopping;

@@ -50,6 +50,10 @@ Requires the Espressif Rust toolchain. See https://docs.esp-rs.org/book/installa
    ```bash
    cargo embed --release
    ```
+  Or
+  ```bash
+  cargo flash --release --chip esp32s3
+  ```
 
 ## First boot
 

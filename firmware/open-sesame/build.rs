@@ -68,6 +68,9 @@ fn main() {
         ("operating_power", "OPERATING_POWER", "i32"),
         ("initial_opening", "INITIAL_OPENING", "i32"),
         ("stall_ticks", "STALL_TICKS", "u32"),
+        ("stall_grace_ticks", "STALL_GRACE_TICKS", "u32"),
+        ("assist_lockout_ticks", "ASSIST_LOCKOUT_TICKS", "u32"),
+        ("settle_ticks", "SETTLE_TICKS", "u32"),
         ("idle_timeout_ms", "IDLE_TIMEOUT_MS", "u64"),
         ("calibrate_power", "CALIBRATE_POWER", "i32"),
         (
@@ -79,6 +82,7 @@ fn main() {
         ("calibration_stall_ticks", "CALIBRATION_STALL_TICKS", "u32"),
         ("button_debounce_ticks", "BUTTON_DEBOUNCE_TICKS", "u32"),
         ("telemetry_ticks", "TELEMETRY_TICKS", "u32"),
+        ("closed_threshold", "CLOSED_THRESHOLD", "i32"),
     ] {
         let v = door
             .get(key)
